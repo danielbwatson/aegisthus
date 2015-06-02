@@ -48,7 +48,9 @@ import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.io.BytesWritable;
 import org.apache.hadoop.mapreduce.Counter;
 import org.apache.hadoop.mapreduce.Job;
+import org.apache.hadoop.mapreduce.Reducer;
 import org.apache.hadoop.mapreduce.lib.input.TextInputFormat;
+import org.apache.hadoop.mapreduce.lib.output.TextOutputFormat;
 import org.apache.hadoop.util.Tool;
 import org.apache.hadoop.util.ToolRunner;
 import org.slf4j.Logger;
@@ -61,6 +63,8 @@ import java.util.List;
 import java.util.Set;
 import java.util.jar.Attributes;
 import java.util.jar.Manifest;
+
+import static com.google.common.base.Preconditions.checkArgument;
 
 public class Aegisthus extends Configured implements Tool {
     private static final Logger LOG = LoggerFactory.getLogger(Aegisthus.class);
@@ -146,6 +150,9 @@ public class Aegisthus extends Configured implements Tool {
         opts.addOption(OptionBuilder.withArgName(Feature.CMD_ARG_PRODUCE_SSTABLE)
                 .withDescription("produces sstable output (default is to produce json)")
                 .create(Feature.CMD_ARG_PRODUCE_SSTABLE));
+        opts.addOption(OptionBuilder.withArgName(Feature.CMD_ARG_PRODUCE_TEXT_OUTPUT)
+                .withDescription("produces text output output (default is to produce json)")
+                .create(Feature.CMD_ARG_PRODUCE_TEXT_OUTPUT));
         opts.addOption(OptionBuilder.withArgName(Feature.CMD_ARG_SSTABLE_OUTPUT_VERSION)
                 .withDescription("version of sstable to produce (default is to produce " +
                         Descriptor.Version.current_version
@@ -209,7 +216,14 @@ public class Aegisthus extends Configured implements Tool {
         job.setOutputKeyClass(BytesWritable.class);
         job.setOutputValueClass(RowWritable.class);
         job.setMapperClass(AegisthusKeyMapper.class);
-        job.setReducerClass(CassSSTableReducer.class);
+
+        String reducerClassName = job.getConfiguration().getTrimmed(
+                Feature.CONF_REDUCER_CLASS_NAME, CassSSTableReducer.class.getName());
+        Class reducer = Class.forName(reducerClassName);
+        checkArgument(Reducer.class.isAssignableFrom(reducer), "Unable to assign %s to Reducer", reducer);
+        //noinspection unchecked
+        job.setReducerClass(reducer);
+
         job.setGroupingComparatorClass(AegisthusKeyGroupingComparator.class);
         job.setPartitionerClass(AegisthusKeyPartitioner.class);
         job.setSortComparatorClass(AegisthusKeySortingComparator.class);
@@ -218,10 +232,14 @@ public class Aegisthus extends Configured implements Tool {
 
         if (cl.hasOption(Feature.CMD_ARG_PRODUCE_SSTABLE)) {
             job.setOutputFormatClass(SSTableOutputFormat.class);
+            CustomFileNameFileOutputFormat.setOutputPath(job, new Path(cl.getOptionValue(Feature.CMD_ARG_OUTPUT_DIR)));
+        } else if (cl.hasOption(Feature.CMD_ARG_PRODUCE_TEXT_OUTPUT)) {
+            job.setOutputFormatClass(TextOutputFormat.class);
+            TextOutputFormat.setOutputPath(job, new Path(cl.getOptionValue(Feature.CMD_ARG_OUTPUT_DIR)));
         } else {
             job.setOutputFormatClass(JsonOutputFormat.class);
+            CustomFileNameFileOutputFormat.setOutputPath(job, new Path(cl.getOptionValue(Feature.CMD_ARG_OUTPUT_DIR)));
         }
-        CustomFileNameFileOutputFormat.setOutputPath(job, new Path(cl.getOptionValue(Feature.CMD_ARG_OUTPUT_DIR)));
 
         job.submit();
         System.out.println(job.getJobID());
@@ -249,6 +267,7 @@ public class Aegisthus extends Configured implements Tool {
         public static final String CMD_ARG_INPUT_FILE = "input";
         public static final String CMD_ARG_OUTPUT_DIR = "output";
         public static final String CMD_ARG_PRODUCE_SSTABLE = "produceSSTable";
+        public static final String CMD_ARG_PRODUCE_TEXT_OUTPUT = "produceTextOutput";
         public static final String CMD_ARG_SSTABLE_OUTPUT_VERSION = "sstable_output_version";
 
         /**
@@ -287,6 +306,10 @@ public class Aegisthus extends Configured implements Tool {
          * The maximum number of corrupt files that Aegisthus can automatically skip.  Defaults to 0.
          */
         public static final String CONF_MAX_CORRUPT_FILES_TO_SKIP = "aegisthus.max_corrupt_files_to_skip";
+        /**
+         * The class name of the reducer to use.  This defaults to CassSSTableReducer
+         */
+        public static final String CONF_REDUCER_CLASS_NAME = "aegisthus.reducer_class_name";
         /**
          * Sort the columns by name rather than by the order in Cassandra.  This defaults to false.
          */
